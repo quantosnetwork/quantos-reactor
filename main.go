@@ -1,3 +1,9 @@
 package main
 
-func main() {}
+import (
+	 "github.com/quantosnetwork/quantos-reactor/karo"
+)
+
+func main() {
+	karo.NewNode()
+}

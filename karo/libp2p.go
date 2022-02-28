@@ -1,9 +1,11 @@
 package karo
 
 import (
-	"github.com/libp2p/go-libp2p-core/host"
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/libp2p/go-libp2p-core/peerstore"
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 /*
@@ -11,7 +13,28 @@ import (
 */
 
 type Node struct {
-	Host      host.Host
-	PeerStore peerstore.Peerstore
-	identity  peer.ID
+	reactor *Reactor
+
+}
+
+func NewNode() {
+	n := new(Node)
+	ctx, cancel := context.WithCancel(nil)
+	go n.reactor.Initialize(ctx, cancel)
+	n.run(cancel)
+}
+
+func (n *Node) run(cancel func()) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
+	<-c
+
+	fmt.Printf("\rExiting...\n")
+
+	cancel()
+
+	if err := n.reactor.Host.Close(); err != nil {
+		panic(err)
+	}
+	os.Exit(0)
 }
