@@ -5,5 +5,5 @@ import (
 )
 
 func main() {
-	karo.NewNode()
+	karo.CreateNode()
 }

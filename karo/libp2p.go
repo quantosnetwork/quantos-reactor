@@ -17,7 +17,7 @@ type Node struct {
 
 }
 
-func NewNode() {
+func CreateNewNode() {
 	n := new(Node)
 	ctx, cancel := context.WithCancel(nil)
 	go n.reactor.Initialize(ctx, cancel)
