@@ -516,13 +516,13 @@ var enumStringMaps = make(map[string]map[int32]string)
 // RegisterEnum is called from the generated code to install the enum descriptor
 // maps into the global table to aid parsing text format protocol buffers.
 func RegisterEnum(typeName string, unusedNameMap map[int32]string, valueMap map[string]int32) {
-//	if _, ok := enumValueMaps[typeName]; ok {
-//		panic("proto: duplicate enum registered: " + typeName)
-//	}
+	if _, ok := enumValueMaps[typeName]; ok {
+		panic("proto: duplicate enum registered: " + typeName)
+	}
 	enumValueMaps[typeName] = valueMap
-//	if _, ok := enumStringMaps[typeName]; ok {
-//		panic("proto: duplicate enum registered: " + typeName)
-//	}
+	if _, ok := enumStringMaps[typeName]; ok {
+		panic("proto: duplicate enum registered: " + typeName)
+	}
 	enumStringMaps[typeName] = unusedNameMap
 }
 
