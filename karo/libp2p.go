@@ -14,12 +14,12 @@ import (
 
 type Node struct {
 	reactor *Reactor
-
 }
 
 func CreateNewNode() {
 	n := new(Node)
-	ctx, cancel := context.WithCancel(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	n.reactor = &Reactor{}
 	go n.reactor.Initialize(ctx, cancel)
 	n.run(cancel)
 }

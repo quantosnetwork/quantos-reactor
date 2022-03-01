@@ -2,21 +2,28 @@ package karo
 
 import (
 	"context"
-	bloom "github.com/bits-and-blooms/bloom/v3"
+	"fmt"
+	"github.com/bits-and-blooms/bloom/v3"
 	ds "github.com/ipfs/go-datastore"
-	libp2p "github.com/libp2p/go-libp2p" //nolint:typecheck
+	"github.com/libp2p/go-libp2p"
 	connmgr "github.com/libp2p/go-libp2p-connmgr"
+	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/event"
 	"github.com/libp2p/go-libp2p-core/host"
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/peerstore"
 	"github.com/libp2p/go-libp2p-core/protocol"
+	router "github.com/libp2p/go-libp2p-core/routing"
 	discovery "github.com/libp2p/go-libp2p-discovery"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	noise "github.com/libp2p/go-libp2p-noise"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	ma "github.com/multiformats/go-multiaddr"
-	router "github.com/libp2p/go-libp2p-core/routing"
+
+	mplex "github.com/libp2p/go-libp2p-mplex"
+	libp2ptls "github.com/libp2p/go-libp2p-tls"
+	yamux "github.com/libp2p/go-libp2p-yamux"
 	"log"
 	"net"
 	"sync"
@@ -29,7 +36,7 @@ const keyAddr = "/addr"
 const keySubnet = "/subnet"
 const protocolID = protocol.ID("/karo/net/v1/")
 
-type Karo interface {
+type KaroInterface interface {
 	Initialize()
 	GetReactor() *Reactor
 	AddPeer(peer.ID)
@@ -43,8 +50,6 @@ type Reactor struct {
 	ID        peer.ID
 	Host      host.Host
 	Bus       event.Bus
-	Stream    network.Stream
-	Conns     []network.Conn
 	PeerStore peerstore.Peerstore
 	Incoming  []peer.ID
 	Outgoing  []peer.ID
@@ -54,7 +59,7 @@ type Reactor struct {
 	Filters   *KaroBloom
 	DHT       *dht.IpfsDHT
 	GossipSub *pubsub.PubSub
-	Karo
+	KaroInterface
 }
 
 type KaroBloom struct {
@@ -64,7 +69,7 @@ type KaroBloom struct {
 }
 
 type BlackList struct {
-	sync.RWMutex
+	mu sync.RWMutex
 
 	blockedPeers   map[peer.ID]struct{}
 	blockedAddrs   map[string]struct{}
@@ -83,29 +88,56 @@ var err error
 
 var reactor Reactor
 
-func (r *Reactor) Initialize(ctx context.Context, cancel func())  {
-	config := r.SetOptions()
-
-	r.Host, err = libp2p.New(config)
-
-	r.Blacklist = new(BlackList)
-	r.Filters = new(KaroBloom)
-
-	r.context = ctx
+func (r *Reactor) Initialize(ctx context.Context, cancel func()) {
 	defer cancel()
-	_, err := r.InitDHT(r.context, r.Host, nil)
-	if err != nil {
-		log.Fatal(err)
-		return
+	newDHT := func(h host.Host) (router.PeerRouting, error) {
+		var err error
+		dht, err := dht.New(ctx, h)
+		return dht, err
 	}
-	r.SetPubSub(r.Host)
-	go r.Discover(r.context, r.Host, "karov1-blockchain")
+	routing := libp2p.Routing(newDHT)
 
+	priv, _, err := crypto.GenerateKeyPair(
+		crypto.Ed25519, // Select your key type. Ed25519 are nice short
+		-1,             // Select key length when possible (i.e. RSA).
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	security := libp2p.ChainOptions(
+		libp2p.Security(libp2ptls.ID, libp2ptls.New),
+		libp2p.Security(noise.ID, noise.New),
+	)
+
+	listenAddrs := libp2p.ListenAddrStrings(
+		"/ip4/0.0.0.0/tcp/0",
+		"/ip4/0.0.0.0/tcp/0/ws",
+	)
+
+	rhost, err := libp2p.New(libp2p.Identity(priv), listenAddrs, security, libp2p.DefaultTransports,
+		libp2p.NATPortMap(), routing, libp2p.EnableAutoRelay(), libp2p.EnableNATService())
+	if err != nil {
+		panic(err)
+	}
+
+	id := rhost.ID().Pretty()
+	fmt.Println(id)
+
+	//	r.Blacklist = new(BlackList)
+
+	/*	_, err = r.InitDHT(r.context, rhost, nil)
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+		r.SetPubSub(r.Host)*/
+	//go r.Discover(r.context, rhost, "karov1-blockchain")
 
 }
 
 func (r *Reactor) InitDHT(ctx context.Context, host host.Host, bootstrapPeers []ma.Multiaddr) (*discovery.
-	RoutingDiscovery, error) {
+RoutingDiscovery, error) {
 	var options []dht.Option
 	var wg sync.WaitGroup
 
@@ -140,34 +172,35 @@ func (r *Reactor) Discover(ctx context.Context, h host.Host, rendezvous string) 
 
 	for {
 		select {
-			case <-ctx.Done():
-				return
-				case <-ticker.C:
-					peers, err := discovery.FindPeers(ctx, routingDiscovery, rendezvous)
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			peers, err := discovery.FindPeers(ctx, routingDiscovery, rendezvous)
+			if err != nil {
+				log.Fatal(err)
+			}
+			for _, p := range peers {
+				if p.ID == h.ID() || p.ID == r.ID {
+					continue
+				}
+				if h.Network().Connectedness(p.ID) != network.Connected {
+					_, err = h.Network().DialPeer(ctx, p.ID)
 					if err != nil {
-						log.Fatal(err)
+						continue
 					}
-					for _, p := range peers {
-						if p.ID == h.ID() || p.ID == r.ID {
-							continue
-						}
-						if h.Network().Connectedness(p.ID) != network.Connected {
-							_, err = h.Network().DialPeer(ctx, p.ID)
-							if err != nil {
-								continue
-							}
-						}
-					}
+				}
+			}
 		}
 	}
 }
 
-func (r Reactor) SetOptions() libp2p.Option {
+func (r Reactor) SetOptions() []libp2p.Option {
 
-	cmgr, _ := connmgr.NewConnManager(
+	mgr, _ := connmgr.NewConnManager(
 		100, // Lowwater
 		400, // HighWater,
 	)
+	cmgr := libp2p.ConnectionManager(mgr)
 	newDHT := func(h host.Host) (router.PeerRouting, error) {
 		var err error
 		d := r.DHT
@@ -175,16 +208,30 @@ func (r Reactor) SetOptions() libp2p.Option {
 	}
 	routing := libp2p.Routing(newDHT)
 
-	return libp2p.ChainOptions(libp2p.EnableRelayService(), libp2p.EnableNATService(), //nolint:typecheck
-		libp2p.EnableRelay(), routing, libp2p.DefaultMuxers, libp2p.DefaultTransports, libp2p.DefaultSecurity,
-		libp2p.ConnectionManager(cmgr)) //nolint:typecheck
+	transports := libp2p.DefaultTransports
+
+	muxers := libp2p.ChainOptions(
+		libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport),
+		libp2p.Muxer("/mplex/6.7.0", mplex.DefaultTransport),
+	)
+
+	security := libp2p.Security(libp2ptls.ID, libp2ptls.New)
+
+	listenAddrs := libp2p.ListenAddrStrings(
+		"/ip4/0.0.0.0/tcp/0",
+		"/ip4/0.0.0.0/tcp/0/ws",
+	)
+	var opt []libp2p.Option
+	opt = append(opt, cmgr, routing, transports, muxers, security, listenAddrs)
+
+	return opt
 
 }
 
 func (r *Reactor) SetPubSub(h host.Host) {
-		ps, err := pubsub.NewGossipSub(r.context, h)
-		if err != nil {
-			panic(err)
-		}
-		r.GossipSub = ps
+	ps, err := pubsub.NewGossipSub(r.context, h)
+	if err != nil {
+		panic(err)
+	}
+	r.GossipSub = ps
 }

@@ -1,9 +1,9 @@
 package main
 
 import (
-	 "github.com/quantosnetwork/quantos-reactor/karo"
+	"quantos_reactor/karo"
 )
 
 func main() {
-	karo.CreateNode()
+	karo.CreateNewNode()
 }
