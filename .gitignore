@@ -15,3 +15,6 @@ terraform/terraform.tfstate.backup
 *.pem
 vendor
 quantos_reactor
+vault-consul-docker/
+terraform/main.tf
+.idea/vcs.xml
