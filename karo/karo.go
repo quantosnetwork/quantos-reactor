@@ -182,22 +182,37 @@ func (r *Reactor) InitDHT(ctx context.Context, host host.Host, bootstrapPeers []
 func Discover(ctx context.Context, h host.Host, rendezvous string) {
 
 	bootstrapPeers := dht.DefaultBootstrapPeers
+
 	var options []dht.Option
 	if len(bootstrapPeers) == 0 {
 		log.Println("starting server only mode...")
 		options = append(options, dht.Mode(dht.ModeServer))
 	}
+	options = append(options, dht.Mode(dht.ModeAuto))
 	DHT, _ := dht.New(ctx, h, options...)
-	routingDiscovery := discovery.NewRoutingDiscovery(DHT)
-	discovery.Advertise(ctx, routingDiscovery, rendezvous)
+	//discovery.Advertise(ctx, routingDiscovery, rendezvous)
 	ticker := time.NewTicker(time.Second * 1)
 	defer ticker.Stop()
 	log.Println(ticker.C)
 	if err = DHT.Bootstrap(ctx); err != nil {
 		panic(err)
 	}
+	var wg sync.WaitGroup
+	for _, peerAddr := range bootstrapPeers {
+		pi, _ := peer.AddrInfoFromP2pAddr(peerAddr)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := h.Connect(ctx, *pi); err != nil {
+				log.Printf("Error while connecting to node %q: %-v", pi, err)
+			}
+		}()
+		wg.Wait()
+	}
+	routingDiscovery := discovery.NewRoutingDiscovery(DHT)
 
 	for {
+
 		select {
 		case <-ctx.Done():
 			return
@@ -209,7 +224,7 @@ func Discover(ctx context.Context, h host.Host, rendezvous string) {
 				log.Fatal(err)
 			}
 			for _, p := range peers {
-
+				log.Println(p.ID.String())
 				if p.ID == h.ID() {
 					continue
 				}
@@ -217,6 +232,7 @@ func Discover(ctx context.Context, h host.Host, rendezvous string) {
 				if h.Network().Connectedness(p.ID) != network.Connected {
 					_, err = h.Network().DialPeer(ctx, p.ID)
 					if err != nil {
+						log.Printf("error: %v", err)
 						continue
 					}
 				}
