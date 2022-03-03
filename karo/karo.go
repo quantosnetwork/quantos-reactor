@@ -3,6 +3,7 @@ package karo
 import (
 	"context"
 	"fmt"
+
 	"github.com/bits-and-blooms/bloom/v3"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/libp2p/go-libp2p"
@@ -21,13 +22,14 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	ma "github.com/multiformats/go-multiaddr"
 
-	mplex "github.com/libp2p/go-libp2p-mplex"
-	libp2ptls "github.com/libp2p/go-libp2p-tls"
-	yamux "github.com/libp2p/go-libp2p-yamux"
 	"log"
 	"net"
 	"sync"
 	"time"
+
+	mplex "github.com/libp2p/go-libp2p-mplex"
+	libp2ptls "github.com/libp2p/go-libp2p-tls"
+	yamux "github.com/libp2p/go-libp2p-yamux"
 )
 
 const ns = "/karo/net"
@@ -88,7 +90,7 @@ var err error
 
 var reactor Reactor
 
-func (r *Reactor) Initialize(ctx context.Context, cancel func()) {
+func (r *Reactor) Initialize(n *Node, ctx context.Context, cancel func()) {
 	defer cancel()
 	newDHT := func(h host.Host) (router.PeerRouting, error) {
 		var err error
@@ -124,27 +126,40 @@ func (r *Reactor) Initialize(ctx context.Context, cancel func()) {
 	id := rhost.ID().Pretty()
 	fmt.Println(id)
 
-	//	r.Blacklist = new(BlackList)
+	//r.Blacklist = new(BlackList)
 
-	/*	_, err = r.InitDHT(r.context, rhost, nil)
-		if err != nil {
-			log.Fatal(err)
-			return
-		}
-		r.SetPubSub(r.Host)*/
-	//go r.Discover(r.context, rhost, "karov1-blockchain")
+	/*_, err = r.InitDHT(ctx, rhost, r.DHT.Bootstrap())
+	if err != nil {
+		log.Fatal(err)
+		return
+	}*/
+	ps, err := pubsub.NewGossipSub(ctx, rhost)
+	if err != nil {
+		panic(err)
+	}
+	r.GossipSub = ps
+	var wg sync.WaitGroup
+	defer wg.Done()
+	wg.Add(1)
+	go func() {
+		Discover(ctx, rhost, "karov1-blockchain")
+	}()
+	wg.Wait()
 
 }
 
 func (r *Reactor) InitDHT(ctx context.Context, host host.Host, bootstrapPeers []ma.Multiaddr) (*discovery.
-RoutingDiscovery, error) {
+	RoutingDiscovery, error) {
 	var options []dht.Option
 	var wg sync.WaitGroup
 
 	if len(bootstrapPeers) == 0 {
 		options = append(options, dht.Mode(dht.ModeServer))
 	}
-	r.DHT, _ = dht.New(ctx, r.Host, options...)
+	r.DHT, err = dht.New(ctx, r.Host, options...)
+	if err != nil {
+		panic(err)
+	}
 	if err = r.DHT.Bootstrap(ctx); err != nil {
 		return nil, err
 	}
@@ -164,11 +179,23 @@ RoutingDiscovery, error) {
 	return nil, nil
 }
 
-func (r *Reactor) Discover(ctx context.Context, h host.Host, rendezvous string) {
-	routingDiscovery := discovery.NewRoutingDiscovery(r.DHT)
+func Discover(ctx context.Context, h host.Host, rendezvous string) {
+
+	bootstrapPeers := dht.DefaultBootstrapPeers
+	var options []dht.Option
+	if len(bootstrapPeers) == 0 {
+		log.Println("starting server only mode...")
+		options = append(options, dht.Mode(dht.ModeServer))
+	}
+	DHT, _ := dht.New(ctx, h, options...)
+	routingDiscovery := discovery.NewRoutingDiscovery(DHT)
 	discovery.Advertise(ctx, routingDiscovery, rendezvous)
 	ticker := time.NewTicker(time.Second * 1)
 	defer ticker.Stop()
+	log.Println(ticker.C)
+	if err = DHT.Bootstrap(ctx); err != nil {
+		panic(err)
+	}
 
 	for {
 		select {
@@ -176,13 +203,17 @@ func (r *Reactor) Discover(ctx context.Context, h host.Host, rendezvous string) 
 			return
 		case <-ticker.C:
 			peers, err := discovery.FindPeers(ctx, routingDiscovery, rendezvous)
+			//log.Println(peers[0].ID.String())
+
 			if err != nil {
 				log.Fatal(err)
 			}
 			for _, p := range peers {
-				if p.ID == h.ID() || p.ID == r.ID {
+
+				if p.ID == h.ID() {
 					continue
 				}
+				log.Println(h.Network().Connectedness(p.ID))
 				if h.Network().Connectedness(p.ID) != network.Connected {
 					_, err = h.Network().DialPeer(ctx, p.ID)
 					if err != nil {
@@ -229,9 +260,5 @@ func (r Reactor) SetOptions() []libp2p.Option {
 }
 
 func (r *Reactor) SetPubSub(h host.Host) {
-	ps, err := pubsub.NewGossipSub(r.context, h)
-	if err != nil {
-		panic(err)
-	}
-	r.GossipSub = ps
+
 }

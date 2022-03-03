@@ -2,10 +2,7 @@ package karo
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
+	"sync"
 )
 
 /*
@@ -17,24 +14,15 @@ type Node struct {
 }
 
 func CreateNewNode() {
-	n := new(Node)
+	n := &Node{}
+	n.reactor = new(Reactor)
 	ctx, cancel := context.WithCancel(context.Background())
-	n.reactor = &Reactor{}
-	go n.reactor.Initialize(ctx, cancel)
-	n.run(cancel)
-}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	defer wg.Done()
+	go func() {
+		n.reactor.Initialize(n, ctx, cancel)
+	}()
+	wg.Wait()
 
-func (n *Node) run(cancel func()) {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
-	<-c
-
-	fmt.Printf("\rExiting...\n")
-
-	cancel()
-
-	if err := n.reactor.Host.Close(); err != nil {
-		panic(err)
-	}
-	os.Exit(0)
 }
