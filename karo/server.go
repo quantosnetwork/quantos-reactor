@@ -35,7 +35,7 @@ type KaroServer struct {
 	discovery        *discovery.Discovery
 	protocols        map[string]Protocol
 	protocolsLock    sync.Mutex
-	secretsManager   vault.Manager
+	secretsManager   vault.SecretManager
 	joinWatchers     map[peer.ID]chan error
 	joinWatchersLock sync.Mutex
 
@@ -51,7 +51,7 @@ type Peer struct {
 	ConnDirection network.Direction
 }
 
-func getLibP2PKey(secretsManager *vault.Manager) (crypto.PrivKey, error) {
+func getLibP2PKey(secretsManager vault.SecretManager) (crypto.PrivKey, error) {
 	var key crypto.PrivKey
 	libp2pKey, libp2pKeyEncoded, keyErr := generateAndEncodeLibP2PKey()
 	if keyErr != nil {
